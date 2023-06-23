@@ -238,6 +238,8 @@ def get_num(max_number):
 
 
 while True:
+    lcd.clear()
+    lcd.write_string("Welcome to\r\nOUSS Inc.")
     print("----------------")
     if finger.read_templates() != adafruit_fingerprint.OK:
         raise RuntimeError("Failed to read templates")
@@ -265,7 +267,14 @@ while True:
             print("Detected #", finger.finger_id, "with confidence", finger.confidence)
             lcd.clear()
             lcd.write_string("Welcome #"+str(finger.finger_id))
+            time.sleep(3)
         else:
+            for i in range(3):
+                lcd.clear()
+                lcd.write_string("Finger not\r\nfound...")
+                time.sleep(1)
+                lcd.clear()
+                time.sleep(1)
             print("Finger not found")
     if c == "d":
         if finger.delete_model(get_num(finger.library_size)) == adafruit_fingerprint.OK:
