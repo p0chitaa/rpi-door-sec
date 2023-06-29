@@ -1,3 +1,4 @@
+
 # SPDX-FileCopyrightText: 2021 ladyada for Adafruit Industries
 # SPDX-License-Identifier: MIT
 
@@ -22,11 +23,6 @@ import time
 import serial
 import adafruit_fingerprint
 from RPLCD.i2c import CharLCD
-import mysql.connector
-import array
-import io
-import numpy as np
-from PIL import Image
 
 # import board
 # uart = busio.UART(board.TX, board.RX, baudrate=57600)
@@ -43,16 +39,11 @@ uart = serial.Serial("/dev/ttyS0", baudrate=57600, timeout=1)
 finger = adafruit_fingerprint.Adafruit_Fingerprint(uart)
 lcd = CharLCD('PCF8574', 0x27)
 
-db_host = "localhost"
-db_user = "root"
-db_pass = "csi"
-db_database = "OUSS"
-db_table = "fpDATA"
-
 ##################################################
 
+
 def get_fingerprint():
-    """Get a fingerprint image, template it, and see if it matches!"""
+    """Get a finger print image, template it, and see if it matches!"""
     lcd.clear()
     lcd.write_string("Place finger\r\non sensor...")
     print("Waiting for image...")
@@ -66,93 +57,22 @@ def get_fingerprint():
     print("Searching...")
     if finger.finger_search() != adafruit_fingerprint.OK:
         return False
-
-    # Get fingerprint information
-    print("Fingerprint information:")
-    print("Template ID:", finger.finger_id)
-    print("Accuracy score:", finger.confidence)
-    print("Number of templates:", finger.template_count)
-
-    template_data = finger.get_fpdata()
-    print(template_data)
-
-    id = 1
-    retrieve_and_print_fpdata(db_host, db_user, db_pass, db_database, db_table, id)
-
+    return Truedef get_fingerprint():
+    """Get a finger print image, template it, and see if it matches!"""
+    lcd.clear()
+    lcd.write_string("Place finger\r\non sensor...")
+    print("Waiting for image...")
+    while finger.get_image() != adafruit_fingerprint.OK:
+        pass
+    print("Templating...")
+    lcd.clear()
+    lcd.write_string("Searching...")
+    if finger.image_2_tz(1) != adafruit_fingerprint.OK:
+        return False
+    print("Searching...")
+    if finger.finger_search() != adafruit_fingerprint.OK:
+        return False
     return True
-
-
-def store_fpdata(host_, user_, password_, database_, fpdata):
-    # Convert the array to bytes
-    data_blob = bytes(fpdata)
-
-    # Connect to the MariaDB server
-    cnx = mysql.connector.connect(user=user_, password=password_, host=host_, database=database_)
-
-    # Create a cursor object
-    cursor = cnx.cursor()
-
-    try:
-        # Prepare the INSERT query
-        insert_query = "INSERT INTO fpDATA (data) VALUES (%s)"
-
-        # Specify the values to be inserted
-        values = (data_blob,)
-
-        # Execute the INSERT query
-        cursor.execute(insert_query, values)
-
-        # Commit the transaction
-        cnx.commit()
-
-        print("Data stored successfully!")
-
-    except mysql.connector.Error as err:
-        # Handle any errors that occurred during the execution
-        print("Error:", err)
-
-    finally:
-        # Fetch any remaining results
-        useless = cursor.fetchall()
-
-        # Close the cursor and connection
-        cursor.close()
-        cnx.close()
-
-
-
-def retrieve_and_print_fpdata(host_, user_, password_, database_, table_, id_):
-    # Connect to the MariaDB server
-    cnx = mysql.connector.connect(user=user_, password=password_, host=host_, database=database_)
-
-    # Create a cursor object
-    cursor = cnx.cursor()
-
-    try:
-        # Fetch the blob data
-        select_query = "SELECT data FROM {table} WHERE id = %s".format(table=table_)
-        select_values = (id_,)
-        cursor.execute(select_query, select_values)
-        result = cursor.fetchone()
-
-        # Print the BLOB data
-        if result:
-            blob_data = result[0]
-            array_data = np.frombuffer(blob_data, dtype=np.uint8)
-            comma_separated_list = ", ".join(str(x) for x in array_data)
-            print(f"[{comma_separated_list}]")
-
-    except mysql.connector.Error as err:
-        # Handle any errors that occurred during the execution
-        print("Error:", err)
-    finally:
-        # Fetch any remaining results
-        useless = cursor.fetchall()
-
-        # Close the cursor and connection
-        cursor.close()
-        cnx.close()
-
 
 
 # pylint: disable=too-many-branches
@@ -187,20 +107,19 @@ def get_fingerprint_detail():
             print("Other error")
         return False
 
-    print("Retrieving fingerprint data from database...")
-    query_fp_data(db_host, db_user, db_pass, db_database)
-
-    # Iterate through the retrieved fingerprint data and compare with the captured fingerprint
-    for row in rows:
-        fingerprint_data = row[1]  # Assuming the fingerprint data is in the second column of the result set
-        captured_data = finger.image_2_tz(0)  # Assuming the captured fingerprint data is in slot 0
-        if fingerprint_data == captured_data:
-            print("Fingerprint matched!")
-            return True
-
-    print("No match found")
-    return False
-
+    print("Searching...", end="")
+    i = finger.finger_fast_search()
+    # pylint: disable=no-else-return
+    # This block needs to be refactored when it can be tested.
+    if i == adafruit_fingerprint.OK:
+        print("Found fingerprint!")
+        return True
+    else:
+        if i == adafruit_fingerprint.NOTFOUND:
+            print("No match found")
+        else:
+            print("Other error")
+        return False
 
 
 # pylint: disable=too-many-statements
@@ -259,8 +178,6 @@ def enroll_finger(location):
     i = finger.create_model()
     if i == adafruit_fingerprint.OK:
         print("Created")
-        store_fpdata(db_host, db_user, db_pass, db_database, i)
-        query_fp_data(db_host, db_user, db_pass, db_database)
     else:
         if i == adafruit_fingerprint.ENROLLMISMATCH:
             print("Prints did not match")
@@ -279,39 +196,9 @@ def enroll_finger(location):
             print("Flash storage error")
         else:
             print("Other error")
-    return False
+        return False
 
     return True
-
-
-def query_fp_data(host_, user_, password_, database_):
-    # Connect to the MariaDB server
-    cnx = mysql.connector.connect(user=user_, password=password_, host=host_, database=database_)
-
-    # Create a cursor object
-    cursor = cnx.cursor()
-
-    try:
-        # Execute the SELECT query
-        select_query = "SELECT * FROM fpDATA"
-        cursor.execute(select_query)
-
-        # Fetch all rows from the result set
-        rows = cursor.fetchall()
-
-        # Print the rows
-        for row in rows:
-            print(row)
-
-    except mysql.connector.Error as err:
-        # Handle any errors that occurred during the execution
-        print("Error:", err)
-
-    finally:
-        # Close the cursor and connection
-        useless = cursor.fetchall()
-        cursor.close()
-        cnx.close()
 
 
 def save_fingerprint_image(filename):

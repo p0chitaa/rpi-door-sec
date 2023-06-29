@@ -1,0 +1,18 @@
+# Import the necessary libraries
+import adafruit_fingerprint
+import board
+import busio
+
+# Create an instance of the Adafruit_Fingerprint object
+uart = busio.UART(board.TX, board.RX, baudrate=57600)
+# Create an instance of the Adafruit_Fingerprint object
+finger = adafruit_fingerprint.Adafruit_Fingerprint()
+Traceback (most recent call last):
+  File "/home/csi4999/Documents/Backup_Code/test_code/newscript.py", line 7, in <module>
+    uart = busio.UART(board.TX, board.RX, baudrate=57600)
+  File "/usr/local/lib/python3.9/dist-packages/busio.py", line 485, in __init__
+    raise RuntimeError(
+RuntimeError: busio.UART not supported on this platform. Please use pyserial instead.
+
+# Use dir() to get the attributes and methods of the Adafruit_Fingerprint object
+print(dir(finger))
