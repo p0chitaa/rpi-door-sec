@@ -1,48 +1,91 @@
-'''
-SPDX-FileCopyrightText: 2021 ladyada for Adafruit Industries
-SPDX-License-Identifier: MIT
-The code is broken down into it's 5 main function that are
-then called by get_num() function later on
-'''
-
 import time
 import serial
 import adafruit_fingerprint
 from RPLCD.i2c import CharLCD
-import mysql.connector 
-import numpy as np
 from PIL import Image
-import pymysql
-import pickle
-import io
-import array
-import struct
+import os
+import random
+import string
 
 
 # If using with Linux/Raspberry Pi and hardware UART:
 uart = serial.Serial("/dev/ttyS0", baudrate=57600, timeout=1)
 
-finger = adafruit_fingerprint.Adafruit_Fingerprint(uart) #initializes fingerprint object or sensor
-lcd = CharLCD('PCF8574', 0x27) #initializes LCD screen
-
-
-#Database Information
-db_host = "localhost"
-db_user = "root"
-db_pass = "csi"
-db_database = "OUSS"
-db_table = "fpDATA"
-
+finger = adafruit_fingerprint.Adafruit_Fingerprint(uart)
+lcd = CharLCD('PCF8574', 0x27)
 
 ##################################################
 
-### ENROLLMENT ###
-def enroll_finger():
-    """Take two finger images, convert to templates, and store in 'fpDATA' table"""
-    fingerprint_templates = []
 
+def get_fingerprint():
+    """Get a finger print image, template it, and see if it matches!"""
+    lcd.clear()
+    lcd.write_string("Place finger\r\non sensor...")
+    print("Waiting for image...")
+    while finger.get_image() != adafruit_fingerprint.OK:
+        pass
+    print("Templating...")
+    lcd.clear()
+    lcd.write_string("Searching...")
+    if finger.image_2_tz(1) != adafruit_fingerprint.OK:
+        return False
+    print("Searching...")
+    if finger.finger_search() != adafruit_fingerprint.OK:
+        return False
+    return True
+
+
+# pylint: disable=too-many-branches
+def get_fingerprint_detail():
+    """Get a finger print image, template it, and see if it matches!
+    This time, print out each error instead of just returning on failure"""
+    print("Getting image...", end="")
+    i = finger.get_image()
+    if i == adafruit_fingerprint.OK:
+        print("Image taken")
+    else:
+        if i == adafruit_fingerprint.NOFINGER:
+            print("No finger detected")
+        elif i == adafruit_fingerprint.IMAGEFAIL:
+            print("Imaging error")
+        else:
+            print("Other error")
+        return False
+
+    print("Templating...", end="")
+    i = finger.image_2_tz(1)
+    if i == adafruit_fingerprint.OK:
+        print("Templated")
+    else:
+        if i == adafruit_fingerprint.IMAGEMESS:
+            print("Image too messy")
+        elif i == adafruit_fingerprint.FEATUREFAIL:
+            print("Could not identify features")
+        elif i == adafruit_fingerprint.INVALIDIMAGE:
+            print("Image invalid")
+        else:
+            print("Other error")
+        return False
+
+    print("Searching...", end="")
+    i = finger.finger_fast_search()
+    # pylint: disable=no-else-return
+    # This block needs to be refactored when it can be tested.
+    if i == adafruit_fingerprint.OK:
+        print("Found fingerprint!")
+        return True
+    else:
+        if i == adafruit_fingerprint.NOTFOUND:
+            print("No match found")
+        else:
+            print("Other error")
+        return False
+
+
+
+def enroll_finger(location):
+    """Take a 2 finger images and template it, then store in 'location'"""
     for fingerimg in range(1, 3):
-        # Capture fingerprint images
         if fingerimg == 1:
             lcd.clear()
             print("Place finger on sensor...", end="")
@@ -66,7 +109,6 @@ def enroll_finger():
                 print("Other error")
                 return False
 
-        # Template the captured fingerprint image
         print("Templating...", end="")
         i = finger.image_2_tz(fingerimg)
         if i == adafruit_fingerprint.OK:
@@ -84,131 +126,94 @@ def enroll_finger():
                 print("Other error")
             return False
 
-        # Store the template data in the list
-        fingerprint_templates.append(finger.templates)
+        if fingerimg == 1:
+            print("Remove finger")
+            lcd.clear()
+            lcd.write_string("Remove finger...")
+            time.sleep(1)
+            while i != adafruit_fingerprint.NOFINGER:
+                i = finger.get_image()
 
-    # Prompt the user for the first and last name
-    print("Enter the first name:", end=" ")
-    first_name = input().strip()
-    print("Enter the last name:", end=" ")
-    last_name = input().strip()
+    print("Creating model...", end="")
+    i = finger.create_model()
+    if i == adafruit_fingerprint.OK:
+        print("Created")
+    else:
+        if i == adafruit_fingerprint.ENROLLMISMATCH:
+            print("Prints did not match")
+        else:
+            print("Other error")
+        return False
 
-    # Store the fingerprint templates in the database
-    store_fingerprint_templates_in_db(fingerprint_templates[0], fingerprint_templates[1], first_name, last_name)
-
-    return True
-
-
-### ENROLLMENT > DATABASE STORAGE ###
-def convert_template_to_blob(template):
-    """Convert the fingerprint template to a blob object"""
-    return array.array('B', template).tobytes()
-
-def store_fingerprint_templates_in_db(template1, template2, first_name, last_name):
-    """Store the fingerprint templates in the 'fpDATA' table in the database"""
-    try:
-        # Connect to the database
-        conn = pymysql.connect(host=db_host, user=db_user, password=db_pass, database=db_database)
-        cursor = conn.cursor()
-
-        # Convert templates to blobs
-        blob_template1 = convert_template_to_blob(template1)
-        blob_template2 = convert_template_to_blob(template2)
-
-        # Insert the templates into the database
-        sql = "INSERT INTO fpDATA (FirstName, LastName, TemplateData, TemplateData2) VALUES (%s, %s, %s, %s)"
-        cursor.execute(sql, (first_name, last_name, blob_template1, blob_template2))
-
-        # Commit the changes and close the connection
-        conn.commit()
-        conn.close()
-        print("Fingerprint templates stored in the database successfully")
-
-    except Exception as e:
-        print("Error storing fingerprint templates in the database:", str(e))
-        if 'conn' in locals() and conn.open:
-            conn.rollback()
-            conn.close()
+    print("Storing model #%d..." % location, end="")
+    i = finger.store_model(location)
+    if i == adafruit_fingerprint.OK:
+        print("Stored")
+    else:
+        if i == adafruit_fingerprint.BADLOCATION:
+            print("Bad storage location")
+        elif i == adafruit_fingerprint.FLASHERR:
+            print("Flash storage error")
+        else:
+            print("Other error")
         return False
 
     return True
 
 
-### DATABASE RETRIEVAL ###
-
-def retrieve_fingerprint_templates_from_db():
-    try:
-        # Connect to the database
-        conn = pymysql.connect(host=db_host, user=db_user, password=db_pass, database=db_database)
-        cursor = conn.cursor()
-
-        # Retrieve the fingerprint templates from the database
-        sql = "SELECT TemplateData, TemplateData2 FROM fpDATA"
-        cursor.execute(sql)
-
-        # Fetch the result
-        result = cursor.fetchone()
-        if result is not None:
-            template1_data = result[0]
-            template2_data = result[1]
-
-            # Convert blob data back to template form
-            template1 = array.array('B', template1_data).tolist()
-            template2 = array.array('B', template2_data).tolist()
-
-            # Return the templates
-            return template1, template2
-
-        else:
-            print("No fingerprint templates found in the database")
-            return None
-
-    except Exception as e:
-        print("Error retrieving fingerprint templates from the database:", str(e))
-        if 'conn' in locals() and conn.open:
-            conn.rollback()
-            conn.close()
-        return None
-
-# Usage example
-templates = retrieve_fingerprint_templates_from_db()
-if templates is not None:
-    template1, template2 = templates
-    # Use the templates as needed
-    print("Template 1:", template1)
-    print("Template 2:", template2)
+############################ Under here is stuff thats changed. Above is all original code from combined.py
 
 
 
+def save_fingerprint_images():
+    """Capture two fingerprint images and save them in a new folder within 'img-dir' directory."""
+    folder_name = str(len(os.listdir("img-dir")) + 1)
+    subfolder_path = os.path.join("img-dir", folder_name)
+    os.makedirs(subfolder_path, exist_ok=True)
+
+    for _ in range(2):
+        # Generate random filename
+        filename = generate_random_filename()
+
+        # Save fingerprint image
+        if not save_fingerprint_image(os.path.join(subfolder_path, filename)):
+            print("Failed to save fingerprint image")
+            return False
+
+    return True
 
 
 
-
-### idk yet ###
-def convert_to_model(fingerprint_image):
-    # Convert fingerprint image to model
-    # Implementation specific to your fingerprint sensor/library
-    model = finger.convert_to_model(fingerprint_image)
-    return model
+def generate_random_filename():
+    """Generate a random filename."""
+    letters = string.ascii_lowercase
+    filename = ''.join(random.choice(letters) for _ in range(8))
+    return filename + ".png"
 
 
 
-def get_fingerprint_image():
-    """Scan fingerprint and return the image as a PIL Image object."""
+def save_fingerprint_image(filename):
+    """Scan fingerprint then save image to filename."""
     while finger.get_image():
         pass
 
-    # Let PIL take care of the image headers and file structure
-    from PIL import Image
+    # let PIL take care of the image headers and file structure
+    from PIL import Image  # pylint: disable=import-outside-toplevel
 
     img = Image.new("L", (256, 288), "white")
     pixeldata = img.load()
     mask = 0b00001111
     result = finger.get_fpdata(sensorbuffer="image")
 
-    # Unpack the data received from the fingerprint module and copy the image data to the "img" placeholder pixel by pixel.
+    # this block "unpacks" the data received from the fingerprint
+    #   module then copies the image data to the image placeholder "img"
+    #   pixel by pixel.  please refer to section 4.2.1 of the manual for
+    #   more details.  thanks to Bastian Raschke and Danylo Esterman.
+    # pylint: disable=invalid-name
     x = 0
+    # pylint: disable=invalid-name
     y = 0
+    # pylint: disable=consider-using-enumerate
     for i in range(len(result)):
         pixeldata[x, y] = (int(result[i]) >> 4) * 17
         x += 1
@@ -219,99 +224,77 @@ def get_fingerprint_image():
         else:
             x += 1
 
-    return img
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    if not img.save(filename):
+        return True
+    return False
 
 
 ##################################################
 
-def main():
-    """Main function for fingerprint example program"""
-    while True:
-        lcd.clear()
-        lcd.write_string("Welcome to\r\nOUSS Inc.")
-        print("----------------")
-        if finger.read_templates() != adafruit_fingerprint.OK:
-            raise RuntimeError("Failed to read templates")
-        print("Fingerprint templates: ", finger.templates)
-        if finger.count_templates() != adafruit_fingerprint.OK:
-            raise RuntimeError("Failed to read templates")
-        print("Number of templates found: ", finger.template_count)
-        if finger.read_sysparam() != adafruit_fingerprint.OK:
-            raise RuntimeError("Failed to get system parameters")
-        print("Size of template library: ", finger.library_size)
-        print("e) enroll print")
-        print("f) find print")
-        print("d) delete print")
-        print("s) save fingerprint image")
-        print("r) reset library")
-        print("p) retrieve and print fingerprint data")
-        print("2) print TemplateData for ID 2")
-        print("q) quit")
-        print("----------------")
-        c = input("> ")
 
-        if c == "e":
-            enroll_finger()
-        elif c == "f":
-            if get_fingerprint():
-                success = "Welcome #"+str(finger.finger_id)
-                print("Detected #", finger.finger_id, "with confidence", finger.confidence)
+def get_num(max_number):
+    """Use input() to get a valid number from 0 to the maximum size
+    of the library. Retry till success!"""
+    i = -1
+    while (i > max_number - 1) or (i < 0):
+        try:
+            i = int(input("Enter ID # from 0-{}: ".format(max_number - 1)))
+        except ValueError:
+            pass
+    return i
+
+
+while True:
+    lcd.clear()
+    lcd.write_string("Welcome to\r\nOUSS Inc.")
+    print("----------------")
+    if finger.read_templates() != adafruit_fingerprint.OK:
+        raise RuntimeError("Failed to read templates")
+    print("Fingerprint templates: ", finger.templates)
+    if finger.count_templates() != adafruit_fingerprint.OK:
+        raise RuntimeError("Failed to read templates")
+    print("Number of templates found: ", finger.template_count)
+    if finger.read_sysparam() != adafruit_fingerprint.OK:
+        raise RuntimeError("Failed to get system parameters")
+    print("Size of template library: ", finger.library_size)
+    print("e) enroll print")
+    print("f) find print")
+    print("d) delete print")
+    print("s) save fingerprint image")
+    print("r) reset library")
+    print("q) quit")
+    print("----------------")
+    c = input("> ")
+
+    if c == "e":
+        enroll_finger(get_num(finger.library_size))
+    if c == "f":
+        if get_fingerprint():
+            success = "Welcome #"+str(finger.finger_id)
+            print("Detected #", finger.finger_id, "with confidence", finger.confidence)
+            lcd.clear()
+            lcd.write_string("Welcome #"+str(finger.finger_id))
+            time.sleep(3)
+        else:
+            for i in range(3):
                 lcd.clear()
-                lcd.write_string("Welcome #"+str(finger.finger_id))
-                time.sleep(3)
-            else:
-                for i in range(3):
-                    lcd.clear()
-                    lcd.write_string("Finger not\r\nfound...")
-                    time.sleep(1)
-                    lcd.clear()
-                    time.sleep(1)
-                print("Finger not found")
-        elif c == "d":
-            if finger.delete_model(get_num(finger.library_size)) == adafruit_fingerprint.OK:
-                print("Deleted!")
-            else:
-                print("Failed to delete")
-        elif c == "s":
-            if save_fingerprint_image("fingerprint.png"):
-                print("Fingerprint image saved")
-            else:
-                print("Failed to save fingerprint image")
-        elif c == "r":
-            if finger.empty_library() == adafruit_fingerprint.OK:
-                print("Library empty!")
-            else:
-                print("Failed to empty library")
-        elif c == "p":
-            retrieve_and_print_fpdata(db_host, db_user, db_pass, db_database, db_table)
-        elif c == "2":
-            template_data = retrieve_fingerprint_templates_from_db()
-            if template_data is not None:
-                template1, template2 = template_data
-                print("TemplateData for ID 2:")
-                print("TemplateData: ", template1)
-                print("TemplateData2: ", template2)
-            else:
-                print("Error retrieving fingerprint templates for ID 2")
-        elif c == "q":
-            print("Exiting fingerprint example program")
-            raise SystemExit
-
-
-if __name__ == "__main__":
-    main()
+                lcd.write_string("Finger not\r\nfound...")
+                time.sleep(1)
+                lcd.clear()
+                time.sleep(1)
+            print("Finger not found")
+    if c == "d":
+        if finger.delete_model(get_num(finger.library_size)) == adafruit_fingerprint.OK:
+            print("Deleted!")
+        else:
+            print("Failed to delete")
+    if c == "s":
+        save_fingerprint_images()
+    if c == "r":
+        if finger.empty_library() == adafruit_fingerprint.OK:
+            print("Library empty!")
+        else:
+            print("Failed to empty library")
+    if c == "q":
+        print("Exiting fingerprint example program")
+        raise SystemExit
